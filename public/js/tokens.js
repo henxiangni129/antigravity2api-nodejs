@@ -87,9 +87,6 @@ function renderTokens(tokens) {
         return;
     }
     
-    // 收集需要自动刷新的过期 Token
-    const expiredTokensToRefresh = [];
-    
     tokenList.innerHTML = filteredTokens.map((token, index) => {
         const expireTime = new Date(token.timestamp + token.expires_in * 1000);
         const isExpired = expireTime < new Date();
@@ -100,11 +97,6 @@ function renderTokens(tokens) {
         // 计算在原始列表中的序号（基于添加顺序）
         const originalIndex = cachedTokens.findIndex(t => t.refresh_token === token.refresh_token);
         const tokenNumber = originalIndex + 1;
-        
-        // 如果已过期且启用状态，加入待刷新列表
-        if (isExpired && token.enable && !isRefreshing) {
-            expiredTokensToRefresh.push(token.refresh_token);
-        }
         
         // 转义所有用户数据防止 XSS
         const safeRefreshToken = escapeJs(token.refresh_token);
@@ -171,13 +163,6 @@ function renderTokens(tokens) {
     
     // 重置动画跳过标志
     skipAnimation = false;
-    
-    // 自动刷新过期的 Token
-    if (expiredTokensToRefresh.length > 0) {
-        expiredTokensToRefresh.forEach(refreshToken => {
-            autoRefreshToken(refreshToken);
-        });
-    }
 }
 
 // 手动刷新 Token
@@ -189,7 +174,7 @@ async function manualRefreshToken(refreshToken) {
     await autoRefreshToken(refreshToken);
 }
 
-// 自动刷新过期 Token
+// 刷新指定 Token（手动触发）
 async function autoRefreshToken(refreshToken) {
     if (refreshingTokens.has(refreshToken)) return;
     

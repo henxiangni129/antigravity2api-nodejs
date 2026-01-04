@@ -92,6 +92,10 @@ function switchTab(tab, saveState = true) {
         // 触发重排以重新播放动画
         void tokensPage.offsetWidth;
         tokensPage.classList.add('page-enter');
+        // 进入 Token 页面时，从后端读取最新 token 列表
+        if (typeof loadTokens === 'function' && authToken) {
+            loadTokens();
+        }
     } else if (tab === 'settings') {
         settingsPage.classList.remove('hidden');
         // 触发重排以重新播放动画

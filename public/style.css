@@ -435,7 +435,7 @@ button.loading::after {
     min-height: 0;
 }
 .token-card {
-    background: rgba(255, 255, 255, 0.85);
+    background: rgba(255, 255, 255, 0.93);
     border: 1.5px solid var(--border);
     border-radius: 0.75rem;
     padding: 0.875rem;
@@ -471,23 +471,40 @@ button.loading::after {
 }
 @media (prefers-color-scheme: dark) {
     .token-card {
-        background: rgba(30, 41, 59, 0.85);
+        background: rgba(30, 41, 59, 0.92);
     }
 }
 .token-card:hover {
     border-color: var(--primary);
     box-shadow: 0 8px 24px rgba(0,0,0,0.12);
-    background: rgba(255, 255, 255, 0.95);
+    background: rgba(255, 255, 255, 0.98);
     transform: translateY(-4px) scale(1.01);
     z-index: 1;
     position: relative;
 }
 @media (prefers-color-scheme: dark) {
     .token-card:hover {
-        background: rgba(30, 41, 59, 0.95);
+        background: rgba(30, 41, 59, 0.97);
     }
 }
-.token-card.disabled { opacity: 0.6; }
+.token-card.disabled {
+    opacity: 0.9;
+    background: rgba(255, 255, 255, 0.88);
+    filter: saturate(0.92);
+}
+@media (prefers-color-scheme: dark) {
+    .token-card.disabled {
+        background: rgba(30, 41, 59, 0.84);
+    }
+}
+.token-card.disabled:hover {
+    background: rgba(255, 255, 255, 0.94);
+}
+@media (prefers-color-scheme: dark) {
+    .token-card.disabled:hover {
+        background: rgba(30, 41, 59, 0.92);
+    }
+}
 .token-card.expired { border-color: var(--danger); }
 .token-card.refreshing {
     border-color: var(--warning);
@@ -1158,8 +1175,32 @@ input:checked + .slider:before {
     margin: 1rem 0 0.5rem 0;
     padding-bottom: 0.375rem;
     border-bottom: 1.5px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    justify-content: space-between;
 }
 .quota-group-title:first-child { margin-top: 0; }
+.quota-group-left {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;
+}
+.quota-group-icon {
+    width: 18px;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+.quota-group-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 .quota-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -1167,7 +1208,7 @@ input:checked + .slider:before {
     padding: 0.5rem;
 }
 .quota-item {
-    background: rgba(255,255,255,0.6);
+    background: rgba(255,255,255,0.85);
     padding: 0.625rem;
     border-radius: 0.5rem;
     border: 1.5px solid var(--border);
@@ -1179,16 +1220,16 @@ input:checked + .slider:before {
     transform: scale(1.02);
     box-shadow: 0 6px 16px rgba(0,0,0,0.12);
     border-color: var(--primary);
-    background: rgba(255,255,255,0.95);
+    background: rgba(255,255,255,0.98);
     z-index: 1;
     position: relative;
 }
 @media (prefers-color-scheme: dark) {
     .quota-item {
-        background: rgba(30, 41, 59, 0.6);
+        background: rgba(30, 41, 59, 0.78);
     }
     .quota-item:hover {
-        background: rgba(30, 41, 59, 0.9);
+        background: rgba(30, 41, 59, 0.94);
     }
 }
 .quota-model-name {
@@ -1196,6 +1237,21 @@ input:checked + .slider:before {
     color: var(--text);
     margin-bottom: 0.375rem;
     font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    min-width: 0;
+}
+.quota-model-icon {
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+.quota-model-text {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1254,11 +1310,39 @@ input:checked + .slider:before {
     min-width: 0;
     font-size: 0.75rem;
 }
-.quota-summary-icon {
-    flex-shrink: 0;
+.quota-summary-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    width: 100%;
+    min-width: 0;
 }
-.quota-summary-model {
-    flex: 1;
+.quota-summary-row {
+    display: grid;
+    grid-template-columns: 18px 1fr 60px 52px;
+    grid-template-areas:
+        "icon label bar pct"
+        ". reset reset reset";
+    align-items: center;
+    gap: 0.35rem;
+    row-gap: 0.1rem;
+    min-width: 0;
+}
+.quota-summary-icon {
+    grid-area: icon;
+    width: 18px;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.quota-icon-img {
+    width: 16px;
+    height: 16px;
+    display: block;
+}
+.quota-summary-label {
+    grid-area: label;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1266,8 +1350,19 @@ input:checked + .slider:before {
     color: var(--text);
     font-weight: 500;
 }
+.quota-summary-reset {
+    grid-area: reset;
+    font-size: 0.65rem;
+    color: var(--text-light);
+    text-align: left;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    font-variant-numeric: tabular-nums;
+    min-width: 0;
+}
 .quota-summary-bar {
-    flex: 0 0 60px;
+    grid-area: bar;
+    width: 60px;
     height: 8px;
     background: var(--border);
     border-radius: 4px;
@@ -1279,6 +1374,7 @@ input:checked + .slider:before {
     border-radius: 4px;
 }
 .quota-summary-pct {
+    grid-area: pct;
     flex-shrink: 0;
     font-weight: 600;
     font-size: 0.7rem;
@@ -1351,6 +1447,10 @@ input:checked + .slider:before {
     flex-shrink: 0;
     font-size: 0.65rem;
 }
+.quota-detail-icon .quota-icon-img {
+    width: 14px;
+    height: 14px;
+}
 .quota-detail-name {
     flex: 1;
     min-width: 0;
@@ -1399,6 +1499,12 @@ input:checked + .slider:before {
 .quota-summary-error {
     color: var(--danger);
     font-size: 0.7rem;
+}
+.quota-group-meta {
+    font-size: 0.75em;
+    font-weight: 400;
+    color: var(--text-light);
+    margin-left: 0.5rem;
 }
 
 .hidden { display: none !important; }
@@ -1496,8 +1602,18 @@ input:checked + .slider:before {
     }
     
     /* 移动端内嵌额度优化 */
-    .quota-summary-model {
+    .quota-summary-label {
         font-size: 0.7rem;
+    }
+    .quota-summary-row {
+        grid-template-columns: 18px 1fr 54px 48px;
+        grid-template-areas:
+            "icon label bar pct"
+            ". reset reset reset";
+        gap: 0.3rem;
+    }
+    .quota-summary-bar {
+        width: 54px;
     }
     
     /* 移动端Token卡片操作按钮 */
@@ -1527,14 +1643,24 @@ input:checked + .slider:before {
         grid-template-columns: repeat(2, 1fr);
     }
     
-    .quota-summary-model {
+    .quota-summary-label {
         font-size: 0.65rem;
     }
     .quota-summary-pct {
         font-size: 0.65rem;
     }
     .quota-summary-bar {
-        flex: 0 0 40px;
+        width: 44px;
+    }
+    .quota-summary-reset {
+        font-size: 0.6rem;
+    }
+    .quota-summary-row {
+        grid-template-columns: 18px 1fr 44px 44px;
+        grid-template-areas:
+            "icon label bar pct"
+            ". reset reset reset";
+        gap: 0.25rem;
     }
     .quota-detail-name {
         font-size: 0.6rem;
