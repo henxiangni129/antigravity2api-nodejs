@@ -24,6 +24,9 @@ class TokenStore {
     this._cacheTime = 0;
     this._cacheTTL = FILE_CACHE_TTL;
     this._salt = null;
+    // 写入锁：防止并发写入导致数据损坏
+    this._writeQueue = Promise.resolve();
+    this._pendingWrite = null;
   }
 
   async _ensureFileExists() {
@@ -128,57 +131,102 @@ class TokenStore {
 
   /**
    * 覆盖写入全部 token，更新缓存
+   * 使用写入队列确保并发安全
    * @param {Array<object>} tokens
    */
   async writeAll(tokens) {
-    await this._ensureFileExists();
     const normalized = Array.isArray(tokens) ? tokens : [];
     
-    // 确保盐值已加载
-    const salt = await this.getSalt();
+    // 使用队列确保写入顺序，避免并发写入导致数据损坏
+    const writeOperation = async () => {
+      await this._ensureFileExists();
+      
+      // 确保盐值已加载
+      const salt = await this.getSalt();
+      
+      try {
+        const fileData = {
+          salt: salt,
+          tokens: normalized
+        };
+        await fs.writeFile(this.filePath, JSON.stringify(fileData, null, 2), 'utf8');
+        this._cache = normalized;
+        this._cacheTime = Date.now();
+      } catch (error) {
+        log.error('保存账号配置文件失败:', error.message);
+        throw error;
+      }
+    };
     
-    try {
-      const fileData = {
-        salt: salt,
-        tokens: normalized
-      };
-      await fs.writeFile(this.filePath, JSON.stringify(fileData, null, 2), 'utf8');
-      this._cache = normalized;
-      this._cacheTime = Date.now();
-    } catch (error) {
-      log.error('保存账号配置文件失败:', error.message);
-      throw error;
-    }
+    // 将写入操作加入队列
+    this._writeQueue = this._writeQueue
+      .then(writeOperation)
+      .catch(error => {
+        // 捕获错误但不中断队列
+        log.error('写入队列操作失败:', error.message);
+      });
+    
+    return this._writeQueue;
   }
 
   /**
    * 根据内存中的启用 token 列表，将对应记录合并回文件
    * - 仅按 refresh_token 匹配并更新已有记录
    * - 未出现在 activeTokens 中的记录（例如已禁用账号）保持不变
+   * 使用防抖机制合并频繁的写入请求
    * @param {Array<object>} activeTokens - 内存中的启用 token 列表（可能包含 sessionId）
    * @param {object|null} tokenToUpdate - 如果只需要单个更新，可传入该 token 以减少遍历
    */
   async mergeActiveTokens(activeTokens, tokenToUpdate = null) {
-    const allTokens = [...await this.readAll()];
+    // 使用写入队列来确保并发安全
+    const mergeOperation = async () => {
+      const allTokens = [...await this.readAll()];
 
-    const applyUpdate = (targetToken) => {
-      if (!targetToken) return;
-      const index = allTokens.findIndex(t => t.refresh_token === targetToken.refresh_token);
-      if (index !== -1) {
-        const { sessionId, ...plain } = targetToken;
-        allTokens[index] = { ...allTokens[index], ...plain };
+      const applyUpdate = (targetToken) => {
+        if (!targetToken) return;
+        const index = allTokens.findIndex(t => t.refresh_token === targetToken.refresh_token);
+        if (index !== -1) {
+          const { sessionId, ...plain } = targetToken;
+          allTokens[index] = { ...allTokens[index], ...plain };
+        }
+      };
+
+      if (tokenToUpdate) {
+        applyUpdate(tokenToUpdate);
+      } else if (Array.isArray(activeTokens) && activeTokens.length > 0) {
+        for (const memToken of activeTokens) {
+          applyUpdate(memToken);
+        }
       }
+
+      return allTokens;
     };
 
-    if (tokenToUpdate) {
-      applyUpdate(tokenToUpdate);
-    } else if (Array.isArray(activeTokens) && activeTokens.length > 0) {
-      for (const memToken of activeTokens) {
-        applyUpdate(memToken);
-      }
-    }
+    // 在队列中执行合并后写入
+    this._writeQueue = this._writeQueue
+      .then(async () => {
+        const mergedTokens = await mergeOperation();
+        await this._ensureFileExists();
+        const salt = await this.getSalt();
+        
+        try {
+          const fileData = {
+            salt: salt,
+            tokens: mergedTokens
+          };
+          await fs.writeFile(this.filePath, JSON.stringify(fileData, null, 2), 'utf8');
+          this._cache = mergedTokens;
+          this._cacheTime = Date.now();
+        } catch (error) {
+          log.error('保存账号配置文件失败:', error.message);
+          // 不抛出错误，避免中断队列
+        }
+      })
+      .catch(error => {
+        log.error('合并写入队列操作失败:', error.message);
+      });
 
-    await this.writeAll(allTokens);
+    return this._writeQueue;
   }
 }
 
