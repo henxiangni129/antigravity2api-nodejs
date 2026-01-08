@@ -56,6 +56,8 @@ export const setStreamHeaders = (res) => {
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no'); // 禁用 nginx 缓冲
+  // 立即发送响应头，确保客户端尽快建立连接
+  res.flushHeaders();
 };
 
 // ==================== 对象池（减少 GC） ====================
@@ -102,6 +104,10 @@ export const writeStreamData = (res, data) => {
   res.write(SSE_PREFIX);
   res.write(json);
   res.write(SSE_SUFFIX);
+  // 立即刷新缓冲区，确保数据实时发送给客户端
+  if (typeof res.flush === 'function') {
+    res.flush();
+  }
 };
 
 /**

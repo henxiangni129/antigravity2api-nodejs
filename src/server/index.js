@@ -24,8 +24,6 @@ import claudeRouter from '../routes/claude.js';
 
 const publicDir = getPublicDir();
 
-logger.info(`静态文件目录: ${getRelativePath(publicDir)}`);
-
 const app = express();
 
 // ==================== 内存管理 ====================

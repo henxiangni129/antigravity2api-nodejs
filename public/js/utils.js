@@ -82,4 +82,12 @@ function updateSensitiveInfoDisplay() {
             row.style.display = '';
         }
     });
+    // 同时隐藏/显示 token-info 容器
+    document.querySelectorAll('.token-info').forEach(container => {
+        if (sensitiveInfoHidden) {
+            container.style.display = 'none';
+        } else {
+            container.style.display = '';
+        }
+    });
 }

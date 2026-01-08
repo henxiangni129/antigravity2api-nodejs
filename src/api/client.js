@@ -8,6 +8,7 @@ import { httpRequest, httpStreamRequest } from '../utils/httpClient.js';
 import { MODEL_LIST_CACHE_TTL } from '../constants/index.js';
 import { createApiError } from '../utils/errors.js';
 import fs from 'fs/promises';
+import fsSync from 'fs';
 import path from 'path';
 import {
   getLineBuffer,
@@ -22,54 +23,113 @@ import { setSignature, shouldCacheSignature, isImageModel } from '../utils/thoug
 let requester = null;
 let useAxios = false;
 
-// ==================== 调试：最终请求/原始响应完整输出 ====================
-const DEBUG_DUMP_DIR = path.join(process.cwd(), 'data', 'debug-dumps');
+// ==================== 调试：最终请求/原始响应完整输出（单文件追加模式） ====================
+const DEBUG_DUMP_FILE = path.join(process.cwd(), 'data', 'debug-dump.log');
 
 function isDebugDumpEnabled() {
   return config.debugDumpRequestResponse === true;
 }
 
-function createDumpId(prefix = 'dump') {
-  const rand = Math.random().toString(16).slice(2, 10);
+// 确保目录存在
+let dumpDirEnsured = false;
+async function ensureDumpDir() {
+  if (dumpDirEnsured) return;
+  await fs.mkdir(path.dirname(DEBUG_DUMP_FILE), { recursive: true });
+  dumpDirEnsured = true;
+}
+
+// 生成时间戳
+function getTimestamp() {
   const now = new Date();
   const pad2 = (n) => String(n).padStart(2, '0');
   const pad3 = (n) => String(n).padStart(3, '0');
-  // Windows 文件名不允许 ':'，所以用 '-' 分隔时间
-  const tsReadable =
-    `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}` +
-    `-${pad2(now.getHours())}-${pad2(now.getMinutes())}-${pad2(now.getSeconds())}` +
-    `-${pad3(now.getMilliseconds())}`;
-  return `${prefix}-${tsReadable}-${rand}`;
+  return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ` +
+    `${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}.${pad3(now.getMilliseconds())}`;
 }
 
-async function writeDumpFile(filename, content) {
-  await fs.mkdir(DEBUG_DUMP_DIR, { recursive: true });
-  const fullPath = path.join(DEBUG_DUMP_DIR, filename);
-  await fs.writeFile(fullPath, content ?? '', 'utf8');
-  return fullPath;
+// 生成唯一请求 ID
+function createDumpId(prefix = 'dump') {
+  const rand = Math.random().toString(16).slice(2, 10);
+  return `${prefix}-${rand}`;
 }
 
+// 追加写入日志文件
+async function appendDumpLog(content) {
+  await ensureDumpDir();
+  await fs.appendFile(DEBUG_DUMP_FILE, content, 'utf8');
+}
+
+// 创建流式响应收集器
+function createStreamCollector() {
+  return { chunks: [] };
+}
+
+// 收集流式响应块
+function collectStreamChunk(collector, chunk) {
+  if (collector) collector.chunks.push(chunk);
+}
+
+// 写入请求体
 async function dumpFinalRequest(dumpId, requestBody) {
   if (!isDebugDumpEnabled()) return;
   try {
     const json = JSON.stringify(requestBody, null, 2);
-    const filePath = await writeDumpFile(`${dumpId}.request.json`, json);
-    logger.warn(`[DEBUG_DUMP ${dumpId}] 已写入最终请求体: ${filePath}`);
-    console.log(`\n[DEBUG_DUMP ${dumpId}] FINAL REQUEST BODY\n${json}\n[DEBUG_DUMP ${dumpId}] END FINAL REQUEST BODY\n`);
+    const header = `\n${'='.repeat(80)}\n[${getTimestamp()}] REQUEST ${dumpId}\n${'='.repeat(80)}\n`;
+    await appendDumpLog(header + json + '\n');
+    logger.warn(`[DEBUG_DUMP ${dumpId}] 已写入请求体到: ${DEBUG_DUMP_FILE}`);
   } catch (e) {
-    logger.error(`[DEBUG_DUMP ${dumpId}] 写入最终请求体失败:`, e?.message || e);
+    logger.error(`[DEBUG_DUMP ${dumpId}] 写入请求体失败:`, e?.message || e);
   }
 }
 
+// 写入流式响应（将所有 chunk 解析为 JSON 数组）
+async function dumpStreamResponse(dumpId, collector) {
+  if (!isDebugDumpEnabled() || !collector) return;
+  try {
+    const header = `\n${'-'.repeat(80)}\n[${getTimestamp()}] RESPONSE ${dumpId} (STREAM)\n${'-'.repeat(80)}\n`;
+    
+    // 解析 SSE 格式的流式响应，提取 JSON 数据
+    const rawContent = collector.chunks.join('');
+    const jsonObjects = [];
+    const lines = rawContent.split('\n');
+    
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('data:')) {
+        const dataStr = trimmed.slice(5).trim();
+        if (dataStr && dataStr !== '[DONE]') {
+          try {
+            const parsed = JSON.parse(dataStr);
+            jsonObjects.push(parsed);
+          } catch {
+            // 非 JSON 数据，保留原始内容
+            jsonObjects.push({ raw: dataStr });
+          }
+        }
+      }
+    }
+    
+    // 以 JSON 数组格式写入
+    const jsonOutput = JSON.stringify(jsonObjects, null, 2);
+    const footer = `\n[${getTimestamp()}] END ${dumpId}\n`;
+    
+    await appendDumpLog(header + jsonOutput + footer);
+    logger.warn(`[DEBUG_DUMP ${dumpId}] 响应记录完成 (${jsonObjects.length} 条数据)`);
+  } catch (e) {
+    logger.error(`[DEBUG_DUMP ${dumpId}] 写入流式响应失败:`, e?.message || e);
+  }
+}
+
+// 写入非流式响应（一次性写入完整响应）
 async function dumpFinalRawResponse(dumpId, rawText, ext = 'txt') {
   if (!isDebugDumpEnabled()) return;
   try {
-    const text = rawText ?? '';
-    const filePath = await writeDumpFile(`${dumpId}.response.${ext}`, text);
-    logger.warn(`[DEBUG_DUMP ${dumpId}] 已写入原始响应: ${filePath}`);
-    console.log(`\n[DEBUG_DUMP ${dumpId}] FINAL RAW RESPONSE\n${text}\n[DEBUG_DUMP ${dumpId}] END FINAL RAW RESPONSE\n`);
+    const header = `\n${'-'.repeat(80)}\n[${getTimestamp()}] RESPONSE ${dumpId} (NO-STREAM)\n${'-'.repeat(80)}\n`;
+    const footer = `\n[${getTimestamp()}] END ${dumpId}\n`;
+    await appendDumpLog(header + (rawText ?? '') + footer);
+    logger.warn(`[DEBUG_DUMP ${dumpId}] 响应记录完成`);
   } catch (e) {
-    logger.error(`[DEBUG_DUMP ${dumpId}] 写入原始响应失败:`, e?.message || e);
+    logger.error(`[DEBUG_DUMP ${dumpId}] 写入响应失败:`, e?.message || e);
   }
 }
 
@@ -210,8 +270,10 @@ export async function generateAssistantResponse(requestBody, token, callback) {
   
   const headers = buildHeaders(token);
   const dumpId = isDebugDumpEnabled() ? createDumpId('stream') : null;
-  if (dumpId) await dumpFinalRequest(dumpId, requestBody);
-  const rawChunks = dumpId ? [] : null;
+  const streamCollector = dumpId ? createStreamCollector() : null;
+  if (dumpId) {
+    await dumpFinalRequest(dumpId, requestBody);
+  }
 
   // 在 state 中临时缓存思维链签名，供流式多片段复用，并携带 session 与 model 信息以写入全局缓存
   const state = {
@@ -223,7 +285,8 @@ export async function generateAssistantResponse(requestBody, token, callback) {
   const lineBuffer = getLineBuffer(); // 从对象池获取
   
   const processChunk = (chunk) => {
-    if (rawChunks) rawChunks.push(chunk);
+    // 收集流式响应用于后续 JSON 格式化输出
+    collectStreamChunk(streamCollector, chunk);
     const lines = lineBuffer.append(chunk);
     for (let i = 0; i < lines.length; i++) {
       parseAndEmitStreamChunk(lines[i], state, callback);
@@ -262,7 +325,8 @@ export async function generateAssistantResponse(requestBody, token, callback) {
           .onData((chunk) => {
             if (statusCode !== 200) {
               errorBody += chunk;
-              if (rawChunks) rawChunks.push(chunk);
+              // 错误响应也收集
+              collectStreamChunk(streamCollector, chunk);
             } else {
               processChunk(chunk);
             }
@@ -279,8 +343,9 @@ export async function generateAssistantResponse(requestBody, token, callback) {
       });
     }
 
-    if (dumpId && rawChunks) {
-      await dumpFinalRawResponse(dumpId, rawChunks.join(''), 'sse.txt');
+    // 流式响应结束后，以 JSON 格式写入日志
+    if (dumpId) {
+      await dumpStreamResponse(dumpId, streamCollector);
     }
   } catch (error) {
     releaseLineBuffer(lineBuffer); // 确保归还

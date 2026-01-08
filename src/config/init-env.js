@@ -27,6 +27,11 @@ if (fs.existsSync(envPath)) {
   
   if (updated) {
     fs.writeFileSync(envPath, envContent, 'utf8');
-    console.log('✓ 环境变量已同步到 .env');
+    // 只显示同步了哪些变量名，不显示具体值，避免敏感信息泄露
+    const syncedKeys = sensitiveKeys.filter(key => {
+      const value = process.env[key];
+      return value !== undefined && value !== '';
+    });
+    console.log(`✓ 环境变量已同步到 .env (${syncedKeys.join(', ')})`);
   }
 }

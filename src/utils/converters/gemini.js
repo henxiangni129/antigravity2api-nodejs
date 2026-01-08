@@ -2,7 +2,7 @@
 import config from '../../config/config.js';
 import { generateRequestId } from '../idGenerator.js';
 import { convertGeminiToolsToAntigravity } from '../toolConverter.js';
-import { getSignatureContext, createThoughtPart, modelMapping, isEnableThinking } from './common.js';
+import { getSignatureContext, createThoughtPart, modelMapping, isEnableThinking, buildSystemInstruction } from './common.js';
 import { normalizeGeminiParameters, toGenerationConfig } from '../parameterNormalizer.js';
 
 /**
@@ -174,12 +174,14 @@ export function generateGeminiRequestBody(geminiBody, modelName, token) {
     request.toolConfig = { functionCallingConfig: { mode: 'VALIDATED' } };
   }
 
-  const existingText = request.systemInstruction?.parts?.[0]?.text || '';
-  const mergedText = existingText ? `${config.systemInstruction}\n\n${existingText}` : config.systemInstruction ?? "";
-  request.systemInstruction = {
-    role: 'user',
-    parts: [{ text: mergedText }]
-  };
+  // 使用新的系统提示词构建函数，支持多 part 结构和位置配置
+  const existingSystemInstruction = request.systemInstruction;
+  const systemInstructionObj = buildSystemInstruction(existingSystemInstruction);
+  if (systemInstructionObj) {
+    request.systemInstruction = systemInstructionObj;
+  } else {
+    delete request.systemInstruction;
+  }
   
   //console.log(JSON.stringify(request, null, 2))
 

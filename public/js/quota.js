@@ -5,6 +5,8 @@ let currentQuotaToken = null;
 const quotaCache = {
     data: {},
     ttl: 5 * 60 * 1000,
+    maxSize: 50, // 最大缓存条目数
+    cleanupTimer: null,
     
     get(tokenId) {
         const cached = this.data[tokenId];
@@ -17,6 +19,11 @@ const quotaCache = {
     },
     
     set(tokenId, data) {
+        // 检查缓存大小，超出时清理最旧的条目
+        const keys = Object.keys(this.data);
+        if (keys.length >= this.maxSize) {
+            this._evictOldest(Math.ceil(this.maxSize * 0.2)); // 清理20%
+        }
         this.data[tokenId] = { data, timestamp: Date.now() };
     },
     
@@ -26,8 +33,66 @@ const quotaCache = {
         } else {
             this.data = {};
         }
+    },
+    
+    // 清理过期缓存
+    cleanup() {
+        const now = Date.now();
+        const keys = Object.keys(this.data);
+        let cleaned = 0;
+        for (const key of keys) {
+            if (now - this.data[key].timestamp > this.ttl) {
+                delete this.data[key];
+                cleaned++;
+            }
+        }
+        return cleaned;
+    },
+    
+    // 清理最旧的 n 个条目
+    _evictOldest(n) {
+        const entries = Object.entries(this.data)
+            .sort((a, b) => a[1].timestamp - b[1].timestamp);
+        for (let i = 0; i < Math.min(n, entries.length); i++) {
+            delete this.data[entries[i][0]];
+        }
+    },
+    
+    // 启动定期清理
+    startCleanupTimer() {
+        if (this.cleanupTimer) return;
+        this.cleanupTimer = setInterval(() => {
+            this.cleanup();
+        }, 60 * 1000); // 每分钟清理一次过期缓存
+    },
+    
+    // 停止定期清理
+    stopCleanupTimer() {
+        if (this.cleanupTimer) {
+            clearInterval(this.cleanupTimer);
+            this.cleanupTimer = null;
+        }
+    },
+    
+    // 获取缓存统计信息
+    getStats() {
+        return {
+            size: Object.keys(this.data).length,
+            maxSize: this.maxSize
+        };
     }
 };
+
+// 页面加载时启动缓存清理定时器
+if (typeof document !== 'undefined') {
+    quotaCache.startCleanupTimer();
+    
+    // 页面卸载时清理
+    window.addEventListener('beforeunload', () => {
+        quotaCache.stopCleanupTimer();
+        quotaCache.clear();
+    });
+}
 
 const QUOTA_GROUPS = [
     {
@@ -150,6 +215,9 @@ async function loadTokenQuotaSummary(tokenId) {
         
         if (data.success && data.data && data.data.models) {
             quotaCache.set(tokenId, data.data);
+            renderQuotaSummary(summaryEl, data.data);
+        } else if (data.success && data.data) {
+            // 禁用的 token 可能返回空数据
             renderQuotaSummary(summaryEl, data.data);
         } else {
             const errMsg = escapeHtml(data.message || '未知错误');
@@ -484,18 +552,25 @@ async function refreshAllQuotas() {
         return;
     }
     
+    // 过滤出启用的 token，禁用的不刷新
+    const enabledTokens = cachedTokens.filter(t => t.enable !== false);
+    if (enabledTokens.length === 0) {
+        showToast('没有已启用的 Token 可刷新', 'warning');
+        return;
+    }
+    
     const btn = document.getElementById('refreshQuotasBtn');
     if (btn) {
         btn.disabled = true;
         btn.textContent = '⏳ 刷新中...';
     }
     
-    // 清除所有前端缓存
-    quotaCache.clear();
+    // 只清除启用 token 的缓存
+    enabledTokens.forEach(t => quotaCache.clear(t.id));
     
     try {
-        // 并行刷新所有 Token 的额度
-        const refreshPromises = cachedTokens.map(async (token) => {
+        // 并行刷新已启用 Token 的额度
+        const refreshPromises = enabledTokens.map(async (token) => {
             try {
                 const response = await authFetch(`/admin/tokens/${encodeURIComponent(token.id)}/quotas?refresh=true`);
                 const data = await response.json();
@@ -510,12 +585,12 @@ async function refreshAllQuotas() {
         
         await Promise.all(refreshPromises);
         
-        // 重新渲染所有额度摘要
-        cachedTokens.forEach(token => {
+        // 重新渲染启用 token 的额度摘要
+        enabledTokens.forEach(token => {
             loadTokenQuotaSummary(token.id);
         });
         
-        showToast('所有额度已刷新', 'success');
+        showToast(`已刷新 ${enabledTokens.length} 个 Token 的额度`, 'success');
     } catch (error) {
         showToast('刷新额度失败: ' + error.message, 'error');
     } finally {

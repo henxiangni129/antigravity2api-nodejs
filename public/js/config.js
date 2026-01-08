@@ -1,5 +1,22 @@
 // 配置管理：加载、保存
 
+// 处理上下文System开关变化
+function handleContextSystemChange() {
+    const useContextSystem = document.getElementById('useContextSystemPrompt');
+    const mergeSystemPrompt = document.getElementById('mergeSystemPrompt');
+    
+    if (useContextSystem && mergeSystemPrompt) {
+        if (useContextSystem.checked) {
+            // 开启上下文System时，合并提示词可以自由选择
+            mergeSystemPrompt.disabled = false;
+        } else {
+            // 关闭上下文System时，合并提示词自动关闭且禁用
+            mergeSystemPrompt.checked = false;
+            mergeSystemPrompt.disabled = true;
+        }
+    }
+}
+
 function toggleRequestCountInput() {
     const strategy = document.getElementById('rotationStrategy').value;
     const requestCountGroup = document.getElementById('requestCountGroup');
@@ -67,6 +84,8 @@ async function loadConfig() {
                 if (form.elements['SKIP_PROJECT_ID_FETCH']) form.elements['SKIP_PROJECT_ID_FETCH'].checked = json.other.skipProjectIdFetch || false;
                 if (form.elements['USE_NATIVE_AXIOS']) form.elements['USE_NATIVE_AXIOS'].checked = json.other.useNativeAxios !== false;
                 if (form.elements['USE_CONTEXT_SYSTEM_PROMPT']) form.elements['USE_CONTEXT_SYSTEM_PROMPT'].checked = json.other.useContextSystemPrompt || false;
+                if (form.elements['MERGE_SYSTEM_PROMPT']) form.elements['MERGE_SYSTEM_PROMPT'].checked = json.other.mergeSystemPrompt !== false;
+                if (form.elements['OFFICIAL_PROMPT_POSITION']) form.elements['OFFICIAL_PROMPT_POSITION'].value = json.other.officialPromptPosition || 'before';
                 if (form.elements['PASS_SIGNATURE_TO_CLIENT']) form.elements['PASS_SIGNATURE_TO_CLIENT'].checked = json.other.passSignatureToClient || false;
                 if (form.elements['USE_FALLBACK_SIGNATURE']) form.elements['USE_FALLBACK_SIGNATURE'].checked = json.other.useFallbackSignature !== false;
                 if (form.elements['CACHE_ALL_SIGNATURES']) form.elements['CACHE_ALL_SIGNATURES'].checked = json.other.cacheAllSignatures || false;
@@ -74,6 +93,14 @@ async function loadConfig() {
                 if (form.elements['CACHE_IMAGE_SIGNATURES']) form.elements['CACHE_IMAGE_SIGNATURES'].checked = json.other.cacheImageSignatures !== false;
                 if (form.elements['CACHE_THINKING']) form.elements['CACHE_THINKING'].checked = json.other.cacheThinking !== false;
             }
+            
+            // 加载官方系统提示词
+            if (env.OFFICIAL_SYSTEM_PROMPT !== undefined) {
+                if (form.elements['OFFICIAL_SYSTEM_PROMPT']) form.elements['OFFICIAL_SYSTEM_PROMPT'].value = env.OFFICIAL_SYSTEM_PROMPT || '';
+            }
+            
+            // 更新合并提示词开关状态
+            handleContextSystemChange();
             if (json.rotation) {
                 if (form.elements['ROTATION_STRATEGY']) {
                     form.elements['ROTATION_STRATEGY'].value = json.rotation.strategy || 'round_robin';
@@ -151,7 +178,7 @@ async function saveConfig(e) {
     const formData = new FormData(form);
     const allConfig = Object.fromEntries(formData);
     
-    const sensitiveKeys = ['API_KEY', 'ADMIN_USERNAME', 'ADMIN_PASSWORD', 'JWT_SECRET', 'PROXY', 'SYSTEM_INSTRUCTION', 'IMAGE_BASE_URL'];
+    const sensitiveKeys = ['API_KEY', 'ADMIN_USERNAME', 'ADMIN_PASSWORD', 'JWT_SECRET', 'PROXY', 'SYSTEM_INSTRUCTION', 'OFFICIAL_SYSTEM_PROMPT', 'IMAGE_BASE_URL'];
     const envConfig = {};
     const jsonConfig = {
         server: {},
@@ -165,6 +192,8 @@ async function saveConfig(e) {
     jsonConfig.other.skipProjectIdFetch = form.elements['SKIP_PROJECT_ID_FETCH']?.checked || false;
     jsonConfig.other.useNativeAxios = form.elements['USE_NATIVE_AXIOS']?.checked || false;
     jsonConfig.other.useContextSystemPrompt = form.elements['USE_CONTEXT_SYSTEM_PROMPT']?.checked || false;
+    jsonConfig.other.mergeSystemPrompt = form.elements['MERGE_SYSTEM_PROMPT']?.checked ?? true;
+    jsonConfig.other.officialPromptPosition = form.elements['OFFICIAL_PROMPT_POSITION']?.value || 'before';
     jsonConfig.other.passSignatureToClient = form.elements['PASS_SIGNATURE_TO_CLIENT']?.checked || false;
     jsonConfig.other.useFallbackSignature = form.elements['USE_FALLBACK_SIGNATURE']?.checked ?? true;
     jsonConfig.other.cacheAllSignatures = form.elements['CACHE_ALL_SIGNATURES']?.checked || false;
@@ -194,7 +223,7 @@ async function saveConfig(e) {
                 const num = parseInt(value);
                 jsonConfig.other.retryTimes = Number.isNaN(num) ? undefined : num;
             }
-            else if (key === 'SKIP_PROJECT_ID_FETCH' || key === 'USE_NATIVE_AXIOS' || key === 'USE_CONTEXT_SYSTEM_PROMPT' || key === 'PASS_SIGNATURE_TO_CLIENT' || key === 'USE_FALLBACK_SIGNATURE' || key === 'CACHE_ALL_SIGNATURES' || key === 'CACHE_TOOL_SIGNATURES' || key === 'CACHE_IMAGE_SIGNATURES' || key === 'CACHE_THINKING') {
+            else if (key === 'SKIP_PROJECT_ID_FETCH' || key === 'USE_NATIVE_AXIOS' || key === 'USE_CONTEXT_SYSTEM_PROMPT' || key === 'MERGE_SYSTEM_PROMPT' || key === 'OFFICIAL_PROMPT_POSITION' || key === 'PASS_SIGNATURE_TO_CLIENT' || key === 'USE_FALLBACK_SIGNATURE' || key === 'CACHE_ALL_SIGNATURES' || key === 'CACHE_TOOL_SIGNATURES' || key === 'CACHE_IMAGE_SIGNATURES' || key === 'CACHE_THINKING') {
                 // 跳过，已在上面处理
             }
             else if (key === 'ROTATION_STRATEGY') jsonConfig.rotation.strategy = value || undefined;

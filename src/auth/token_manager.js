@@ -99,7 +99,11 @@ class TokenManager {
       return;
     }
 
-    log.info(`发现 ${expiredTokens.length} 个过期token，开始并发刷新...`);
+    // 获取 salt 用于生成 tokenId
+    const salt = await this.store.getSalt();
+    const tokenIds = expiredTokens.map(token => generateTokenId(token.refresh_token, salt));
+    
+    log.info(`正在批量刷新 ${tokenIds.length} 个token: ${tokenIds.join(', ')}`);
     const startTime = Date.now();
 
     const results = await Promise.allSettled(
@@ -109,19 +113,22 @@ class TokenManager {
     let successCount = 0;
     let failCount = 0;
     const tokensToDisable = [];
+    const failedTokenIds = [];
 
     results.forEach((result, index) => {
       const token = expiredTokens[index];
+      const tokenId = tokenIds[index];
       if (result.status === 'fulfilled') {
         if (result.value === 'success') {
           successCount++;
         } else if (result.value === 'disable') {
           tokensToDisable.push(token);
           failCount++;
+          failedTokenIds.push(tokenId);
         }
       } else {
         failCount++;
-        log.error(`...${token.access_token?.slice(-8) || 'unknown'} 刷新失败:`, result.reason?.message || result.reason);
+        failedTokenIds.push(tokenId);
       }
     });
 
@@ -131,7 +138,11 @@ class TokenManager {
     }
 
     const elapsed = Date.now() - startTime;
-    log.info(`并发刷新完成: 成功 ${successCount}, 失败 ${failCount}, 耗时 ${elapsed}ms`);
+    if (failCount > 0) {
+      log.warn(`刷新完成: 成功 ${successCount}, 失败 ${failCount} (${failedTokenIds.join(', ')}), 耗时 ${elapsed}ms`);
+    } else {
+      log.info(`刷新完成: 成功 ${successCount}, 耗时 ${elapsed}ms`);
+    }
   }
 
   /**
@@ -142,11 +153,11 @@ class TokenManager {
    */
   async _refreshTokenSafe(token) {
     try {
-      await this.refreshToken(token);
+      // 并发刷新时使用静默模式，避免重复打印日志
+      await this.refreshToken(token, true);
       return 'success';
     } catch (error) {
       if (error.statusCode === 403 || error.statusCode === 400) {
-        log.warn(`...${token.access_token?.slice(-8) || 'unknown'}: Token 已失效，将被禁用`);
         return 'disable';
       }
       throw error;
@@ -220,10 +231,10 @@ class TokenManager {
   async fetchProjectId(token) {
     const response = await axios(buildAxiosRequestConfig({
       method: 'POST',
-      url: 'https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist',
+      url: 'https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist',
       headers: {
-        'Host': 'daily-cloudcode-pa.sandbox.googleapis.com',
-        'User-Agent': 'antigravity/1.11.9 windows/amd64',
+        'Host': 'daily-cloudcode-pa.googleapis.com',
+        'User-Agent': 'antigravity/1.13.3 windows/amd64',
         'Authorization': `Bearer ${token.access_token}`,
         'Content-Type': 'application/json',
         'Accept-Encoding': 'gzip'
@@ -244,8 +255,14 @@ class TokenManager {
     return Date.now() >= expiresAt - TOKEN_REFRESH_BUFFER;
   }
 
-  async refreshToken(token) {
-    log.info('正在刷新token...');
+  async refreshToken(token, silent = false) {
+    // 获取 tokenId 用于日志显示
+    const salt = await this.store.getSalt();
+    const tokenId = generateTokenId(token.refresh_token, salt);
+    if (!silent) {
+      log.info(`正在刷新token: ${tokenId}`);
+    }
+    
     const body = new URLSearchParams({
       client_id: OAUTH_CONFIG.CLIENT_ID,
       client_secret: OAUTH_CONFIG.CLIENT_SECRET,
@@ -274,9 +291,8 @@ class TokenManager {
     } catch (error) {
       const statusCode = error.response?.status;
       const rawBody = error.response?.data;
-      const suffix = token.access_token ? token.access_token.slice(-8) : null;
       const message = typeof rawBody === 'string' ? rawBody : (rawBody?.error?.message || error.message || '刷新 token 失败');
-      throw new TokenError(message, suffix, statusCode || 500);
+      throw new TokenError(message, tokenId, statusCode || 500);
     }
   }
 

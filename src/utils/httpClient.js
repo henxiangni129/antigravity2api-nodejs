@@ -2,6 +2,7 @@ import axios from 'axios';
 import dns from 'dns';
 import http from 'http';
 import https from 'https';
+import { Readable } from 'stream';
 import config from '../config/config.js';
 
 // ==================== DNS & 代理统一配置 ====================
@@ -47,6 +48,12 @@ function buildProxyConfig() {
   }
 }
 
+// 将数据转换为流以启用 chunked 编码
+function createChunkedStream(data) {
+  const jsonStr = typeof data === 'string' ? data : JSON.stringify(data);
+  return Readable.from([jsonStr]);
+}
+
 // 为 axios 构建统一请求配置
 export function buildAxiosRequestConfig({
   method = 'POST',
@@ -54,32 +61,48 @@ export function buildAxiosRequestConfig({
   headers,
   data = null,
   timeout = config.timeout,
-  responseType
+  responseType,
+  useChunked = false
 }) {
   const axiosConfig = {
     method,
     url,
-    headers,
+    headers: { ...headers },
     timeout,
     httpAgent,
     httpsAgent,
-    proxy: buildProxyConfig()
+    proxy: buildProxyConfig(),
+    // 禁用自动设置 Content-Length，让 axios 使用 Transfer-Encoding: chunked
+    maxContentLength: Infinity,
+    maxBodyLength: Infinity
   };
 
   if (responseType) axiosConfig.responseType = responseType;
-  if (data !== null) axiosConfig.data = data;
+  
+  if (data !== null) {
+    if (useChunked) {
+      // 使用流式数据以启用 chunked 编码
+      axiosConfig.data = createChunkedStream(data);
+      // 删除 Content-Length 头，强制使用 chunked
+      delete axiosConfig.headers['Content-Length'];
+    } else {
+      axiosConfig.data = data;
+    }
+  }
   return axiosConfig;
 }
 
 // 简单封装 axios 调用，方便后续统一扩展（重试、打点等）
 export async function httpRequest(configOverrides) {
-  const axiosConfig = buildAxiosRequestConfig(configOverrides);
+  // 默认启用 chunked 编码以匹配官方客户端行为
+  const axiosConfig = buildAxiosRequestConfig({ ...configOverrides, useChunked: true });
   return axios(axiosConfig);
 }
 
 // 流式请求封装
 export async function httpStreamRequest(configOverrides) {
-  const axiosConfig = buildAxiosRequestConfig(configOverrides);
+  // 默认启用 chunked 编码以匹配官方客户端行为
+  const axiosConfig = buildAxiosRequestConfig({ ...configOverrides, useChunked: true });
   axiosConfig.responseType = 'stream';
   return axios(axiosConfig);
 }

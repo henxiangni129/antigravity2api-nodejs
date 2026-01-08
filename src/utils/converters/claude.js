@@ -140,7 +140,8 @@ function claudeMessageToAntigravity(claudeMessages, enableThinking, actualModelN
 export function generateClaudeRequestBody(claudeMessages, modelName, parameters, claudeTools, systemPrompt, token) {
   const enableThinking = isEnableThinking(modelName);
   const actualModelName = modelMapping(modelName);
-  const mergedSystem = mergeSystemInstruction(config.systemInstruction || '', systemPrompt);
+  // 直接传递用户的系统提示词，让 buildSystemInstruction 处理所有合并逻辑
+  // 包括反重力官方提示词、萌萌提示词和用户提示词的位置配置
 
   const tools = convertClaudeToolsToAntigravity(claudeTools, token.sessionId, actualModelName);
   const hasTools = tools && tools.length > 0;
@@ -150,6 +151,6 @@ export function generateClaudeRequestBody(claudeMessages, modelName, parameters,
     tools: tools,
     generationConfig: generateGenerationConfig(parameters, enableThinking, actualModelName),
     sessionId: token.sessionId,
-    systemInstruction: mergedSystem
+    systemInstruction: systemPrompt
   }, token, actualModelName);
 }

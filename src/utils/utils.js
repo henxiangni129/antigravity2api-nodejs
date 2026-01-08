@@ -44,12 +44,27 @@ const EXCLUDED_KEYS = new Set([
   'any_of', 'one_of', 'all_of', 'multipleOf'
 ]);
 
+// 需要转换为大写的 type 值映射
+const TYPE_UPPERCASE_MAP = {
+  'object': 'OBJECT',
+  'string': 'STRING',
+  'number': 'NUMBER',
+  'integer': 'INTEGER',
+  'boolean': 'BOOLEAN',
+  'array': 'ARRAY'
+};
+
 export function cleanParameters(obj) {
   if (!obj || typeof obj !== 'object') return obj;
   const cleaned = Array.isArray(obj) ? [] : {};
   for (const [key, value] of Object.entries(obj)) {
     if (EXCLUDED_KEYS.has(key)) continue;
-    cleaned[key] = (value && typeof value === 'object') ? cleanParameters(value) : value;
+    if (key === 'type' && typeof value === 'string') {
+      // 将 type 值转换为大写以匹配官方 API 格式
+      cleaned[key] = TYPE_UPPERCASE_MAP[value.toLowerCase()] || value.toUpperCase();
+    } else {
+      cleaned[key] = (value && typeof value === 'object') ? cleanParameters(value) : value;
+    }
   }
   return cleaned;
 }
@@ -144,9 +159,13 @@ export function generateGenerationConfig(parameters, enableThinking, actualModel
 }
 
 // ==================== System 指令提取 ====================
+/**
+ * 从 OpenAI 消息中提取系统指令
+ * @param {Array} openaiMessages - OpenAI 格式的消息数组
+ * @returns {string} 用户请求中的系统提示词（不包含萌萌和反重力官方提示词）
+ */
 export function extractSystemInstruction(openaiMessages) {
-  const baseSystem = config.systemInstruction || '';
-  if (!config.useContextSystemPrompt) return baseSystem;
+  if (!config.useContextSystemPrompt) return '';
 
   const systemTexts = [];
   for (const message of openaiMessages) {
@@ -162,10 +181,8 @@ export function extractSystemInstruction(openaiMessages) {
     }
   }
 
-  const parts = [];
-  if (baseSystem.trim()) parts.push(baseSystem.trim());
-  if (systemTexts.length > 0) parts.push(systemTexts.join('\n\n'));
-  return parts.join('\n\n');
+  // 只返回用户请求中的系统提示词，萌萌和反重力官方提示词由 buildSystemInstruction 处理
+  return systemTexts.join('\n\n');
 }
 
 // ==================== 图片请求准备 ====================

@@ -191,45 +191,152 @@ export function pushModelMessage({ parts, toolCalls, hasContent }, antigravityMe
  * @returns {Object} 请求体
  */
 export function buildRequestBody({ contents, tools, generationConfig, sessionId, systemInstruction }, token, actualModelName) {
+  const hasTools = tools && tools.length > 0;
+  
   const requestBody = {
     project: token.projectId,
     requestId: generateRequestId(),
     request: {
       contents,
-      tools: tools || [],
-      toolConfig: { functionCallingConfig: { mode: 'VALIDATED' } },
       generationConfig,
       sessionId
     },
     model: actualModelName,
-    userAgent: 'antigravity'
+    userAgent: 'antigravity',
+    requestType: 'agent'
   };
 
-  if (systemInstruction) {
-    requestBody.request.systemInstruction = {
-      role: 'user',
-      parts: [{ text: systemInstruction }]
-    };
+  // 只在有工具时才添加 tools 和 toolConfig 字段
+  if (hasTools) {
+    requestBody.request.tools = tools;
+    requestBody.request.toolConfig = { functionCallingConfig: { mode: 'VALIDATED' } };
+  }
+
+  // 构建系统提示词
+  const systemInstructionObj = buildSystemInstruction(systemInstruction);
+  if (systemInstructionObj) {
+    requestBody.request.systemInstruction = systemInstructionObj;
   }
 
   return requestBody;
 }
 
 /**
- * 合并系统指令
- * @param {string} baseSystem - 基础系统指令
- * @param {string} contextSystem - 上下文系统指令
+ * 构建系统提示词 parts 数组
+ *
+ * 逻辑说明：
+ * 1. 官方提示词：反重力官方要求的提示词，可在前端编辑
+ * 2. 反代提示词：反代自带的提示词（如萌萌），可在前端编辑
+ * 3. 用户请求提示词：用户在 API 请求中传入的 system 消息
+ *
+ * 配置选项：
+ * - useContextSystemPrompt: 开启后，将用户请求的 system 追加到反代提示词后面
+ * - mergeSystemPrompt: 开启后，将所有提示词合并为单个 part（需要先开启 useContextSystemPrompt）
+ * - officialPromptPosition: 官方提示词位置，'before' = 在反代提示词前面，'after' = 在反代提示词后面
+ *
+ * @param {string|Array} userSystemPrompt - 用户请求中的系统提示词（字符串或 parts 数组）
+ * @returns {Array} 系统提示词 parts 数组
+ */
+export function buildSystemPromptParts(userSystemPrompt) {
+  const parts = [];
+  
+  // 获取各层提示词
+  const officialPrompt = config.officialSystemPrompt || '';
+  const proxyPrompt = config.systemInstruction || '';
+  
+  // 处理用户提示词：可能是字符串或 parts 数组
+  let userParts = [];
+  if (userSystemPrompt) {
+    if (typeof userSystemPrompt === 'string' && userSystemPrompt.trim()) {
+      userParts = [{ text: userSystemPrompt.trim() }];
+    } else if (Array.isArray(userSystemPrompt)) {
+      userParts = userSystemPrompt.filter(p => p && (p.text || p.inlineData));
+    } else if (typeof userSystemPrompt === 'object' && userSystemPrompt.parts) {
+      // 处理 { role: 'user', parts: [...] } 格式
+      userParts = userSystemPrompt.parts.filter(p => p && (p.text || p.inlineData));
+    }
+  }
+  
+  // 构建反代提示词部分（可能包含用户请求的 system）
+  const proxyParts = [];
+  if (proxyPrompt.trim()) {
+    proxyParts.push({ text: proxyPrompt.trim() });
+  }
+  
+  // 如果开启上下文 System，将用户请求的 system 追加到反代提示词后面
+  if (config.useContextSystemPrompt && userParts.length > 0) {
+    proxyParts.push(...userParts);
+  }
+  
+  // 根据官方提示词位置配置，组合最终的 parts 数组
+  if (config.officialPromptPosition === 'before') {
+    // 官方提示词在前
+    if (officialPrompt.trim()) {
+      parts.push({ text: officialPrompt.trim() });
+    }
+    parts.push(...proxyParts);
+  } else {
+    // 官方提示词在后
+    parts.push(...proxyParts);
+    if (officialPrompt.trim()) {
+      parts.push({ text: officialPrompt.trim() });
+    }
+  }
+  
+  return parts;
+}
+
+/**
+ * 构建系统提示词（合并为单个字符串或保留多 part 结构）
+ * @param {string|Array} userSystemPrompt - 用户请求中的系统提示词
+ * @returns {Object} { text: string } 或 { parts: Array }
+ */
+export function buildSystemInstruction(userSystemPrompt) {
+  const parts = buildSystemPromptParts(userSystemPrompt);
+  
+  if (parts.length === 0) {
+    return null;
+  }
+  
+  if (config.mergeSystemPrompt) {
+    // 合并为单个字符串
+    const mergedText = parts
+      .map(p => p.text || '')
+      .filter(t => t.trim())
+      .join('\n\n');
+    return {
+      role: 'user',
+      parts: [{ text: mergedText }]
+    };
+  } else {
+    // 保留多 part 结构
+    return {
+      role: 'user',
+      parts: parts
+    };
+  }
+}
+
+/**
+ * 合并系统指令（兼容旧接口）
+ * @param {string} baseSystem - 基础系统指令（萌萌提示词）
+ * @param {string} contextSystem - 上下文系统指令（用户请求中的提示词）
  * @returns {string} 合并后的系统指令
  */
 export function mergeSystemInstruction(baseSystem, contextSystem) {
-  if (!config.useContextSystemPrompt || !contextSystem) {
+  // 使用新的构建函数
+  const result = buildSystemInstruction(contextSystem);
+  
+  if (!result) {
     return baseSystem || '';
   }
-
-  const parts = [];
-  if (baseSystem && typeof baseSystem === 'string' && baseSystem.trim()) parts.push(baseSystem.trim());
-  if (contextSystem && typeof contextSystem === 'string' && contextSystem.trim()) parts.push(contextSystem.trim());
-  return parts.join('\n\n');
+  
+  // 返回合并后的文本
+  if (result.parts && result.parts.length > 0) {
+    return result.parts.map(p => p.text || '').filter(t => t.trim()).join('\n\n');
+  }
+  
+  return baseSystem || '';
 }
 
 // 重导出常用函数

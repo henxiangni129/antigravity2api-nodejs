@@ -132,7 +132,13 @@ export const handleOpenAIRequest = async (req, res) => {
         endStream(res);
       } catch (error) {
         clearInterval(heartbeatTimer);
-        throw error;
+        if (!res.writableEnded) {
+          const statusCode = error.statusCode || error.status || 500;
+          writeStreamData(res, buildOpenAIErrorPayload(error, statusCode));
+          endStream(res);
+        }
+        logger.error('生成响应失败:', error.message);
+        return;
       }
     } else {
       // 非流式请求：设置较长超时，避免大模型响应超时

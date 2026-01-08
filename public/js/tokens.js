@@ -7,6 +7,31 @@ let skipAnimation = false; // 是否跳过动画
 // 移动端操作区手动收起/展开
 let actionBarCollapsed = localStorage.getItem('actionBarCollapsed') === 'true';
 
+// 存储事件监听器引用，便于清理
+const eventListenerRegistry = new WeakMap();
+
+// 注册事件监听器（便于后续清理）
+function registerEventListener(element, event, handler, options) {
+    if (!element) return;
+    element.addEventListener(event, handler, options);
+    
+    if (!eventListenerRegistry.has(element)) {
+        eventListenerRegistry.set(element, []);
+    }
+    eventListenerRegistry.get(element).push({ event, handler, options });
+}
+
+// 清理元素上的所有注册事件监听器
+function cleanupEventListeners(element) {
+    if (!element || !eventListenerRegistry.has(element)) return;
+    
+    const listeners = eventListenerRegistry.get(element);
+    for (const { event, handler, options } of listeners) {
+        element.removeEventListener(event, handler, options);
+    }
+    eventListenerRegistry.delete(element);
+}
+
 // 导出 Token（需要密码验证）
 async function exportTokens() {
     const password = await showPasswordPrompt('请输入管理员密码以导出 Token');
@@ -36,7 +61,12 @@ async function exportTokens() {
             URL.revokeObjectURL(url);
             showToast('导出成功', 'success');
         } else {
-            showToast(data.message || '导出失败', 'error');
+            // 密码错误或其他错误时显示具体错误信息
+            if (response.status === 403) {
+                showToast('密码错误，请重新输入', 'error');
+            } else {
+                showToast(data.message || '导出失败', 'error');
+            }
         }
     } catch (error) {
         hideLoading();
@@ -44,78 +74,507 @@ async function exportTokens() {
     }
 }
 
-// 导入 Token（需要密码验证）
+// 导入 Token（需要密码验证）- 打开拖拽上传弹窗
 async function importTokens() {
-    // 创建文件选择器
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json';
-    
-    input.onchange = async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        
-        try {
-            const text = await file.text();
-            const importData = JSON.parse(text);
-            
-            // 验证数据格式
-            if (!importData.tokens || !Array.isArray(importData.tokens)) {
-                showToast('无效的导入文件格式', 'error');
-                return;
-            }
-            
-            // 显示导入选项
-            showImportModal(importData);
-        } catch (error) {
-            showToast('读取文件失败: ' + error.message, 'error');
-        }
-    };
-    
-    input.click();
+    showImportUploadModal();
 }
 
-// 显示导入选项模态框
-function showImportModal(importData) {
-    const tokenCount = importData.tokens.length;
+// 当前导入模式：'file' | 'json' | 'manual'
+let currentImportTab = 'file';
+
+// 存储导入弹窗的事件处理器引用
+let importModalHandlers = null;
+
+// 显示导入上传弹窗（支持拖拽、手动输入JSON和手动填入Token）
+function showImportUploadModal() {
     const modal = document.createElement('div');
     modal.className = 'modal form-modal';
+    modal.id = 'importUploadModal';
     modal.innerHTML = `
-        <div class="modal-content">
-            <div class="modal-title">📥 导入 Token</div>
-            <p>文件包含 <strong>${tokenCount}</strong> 个 Token</p>
-            <p style="font-size: 0.85rem; color: var(--text-light);">导出时间: ${importData.exportTime || '未知'}</p>
-            <div class="form-group">
+        <div class="modal-content modal-lg">
+            <div class="modal-title">📥 添加/导入 Token</div>
+            
+            <!-- 导入方式切换标签 -->
+            <div class="import-tabs">
+                <button class="import-tab active" data-tab="file" onclick="switchImportTab('file')">📁 文件上传</button>
+                <button class="import-tab" data-tab="json" onclick="switchImportTab('json')">📝 JSON导入</button>
+                <button class="import-tab" data-tab="manual" onclick="switchImportTab('manual')">✏️ 手动填入</button>
+            </div>
+            
+            <!-- 文件上传区域 -->
+            <div class="import-tab-content" id="importTabFile">
+                <div class="import-dropzone" id="importDropzone">
+                    <div class="dropzone-icon">📁</div>
+                    <div class="dropzone-text">拖拽文件到此处</div>
+                    <div class="dropzone-hint">或点击选择文件</div>
+                    <input type="file" id="importFileInput" accept=".json" style="display: none;">
+                </div>
+                <div class="import-file-info hidden" id="importFileInfo">
+                    <div class="file-info-icon">📄</div>
+                    <div class="file-info-details">
+                        <div class="file-info-name" id="importFileName">-</div>
+                        <div class="file-info-meta" id="importFileMeta">-</div>
+                    </div>
+                    <button class="btn btn-xs btn-secondary" onclick="clearImportFile()">✕</button>
+                </div>
+            </div>
+            
+            <!-- 手动输入JSON区域 -->
+            <div class="import-tab-content hidden" id="importTabJson">
+                <div class="form-group">
+                    <label>📝 粘贴 JSON 内容</label>
+                    <textarea id="importJsonInput" rows="8" placeholder='{"tokens": [...], "exportTime": "..."}'></textarea>
+                </div>
+                <div class="import-json-actions">
+                    <button class="btn btn-sm btn-info" onclick="parseImportJson()">🔍 解析 JSON</button>
+                    <span class="import-json-status" id="importJsonStatus"></span>
+                </div>
+            </div>
+            
+            <!-- 手动填入Token区域 -->
+            <div class="import-tab-content hidden" id="importTabManual">
+                <div class="form-group">
+                    <label>🔑 Access Token <span style="color: var(--danger);">*</span></label>
+                    <input type="text" id="manualAccessToken" placeholder="Access Token (必填)">
+                </div>
+                <div class="form-group">
+                    <label>🔄 Refresh Token <span style="color: var(--danger);">*</span></label>
+                    <input type="text" id="manualRefreshToken" placeholder="Refresh Token (必填)">
+                </div>
+                <div class="form-group">
+                    <label>⏱️ 有效期(秒)</label>
+                    <input type="number" id="manualExpiresIn" placeholder="有效期(秒)" value="3599">
+                </div>
+                <p style="font-size: 0.8rem; color: var(--text-light); margin-bottom: 0.5rem;">💡 有效期默认3599秒(约1小时)，手动填入不需要密码验证</p>
+            </div>
+            
+            <!-- 导入模式（仅文件上传和JSON导入时显示） -->
+            <div class="form-group" id="importModeGroup">
                 <label>导入模式</label>
                 <select id="importMode">
                     <option value="merge">合并（保留现有，添加新的）</option>
                     <option value="replace">替换（清空现有，导入新的）</option>
                 </select>
             </div>
-            <div class="form-group">
-                <label>管理员密码</label>
-                <input type="password" id="importPassword" placeholder="请输入管理员密码">
+            
+            <!-- 密码验证（仅文件上传和JSON导入时显示） -->
+            <div class="form-group" id="importPasswordGroup">
+                <label>🔐 管理员密码</label>
+                <input type="password" id="importPassword" placeholder="请输入管理员密码验证">
             </div>
+            
             <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="this.closest('.modal').remove()">取消</button>
-                <button class="btn btn-success" onclick="confirmImport(this)">✅ 确认导入</button>
+                <button class="btn btn-secondary" onclick="closeImportModal()">取消</button>
+                <button class="btn btn-success" id="confirmImportBtn" onclick="confirmImportFromModal()" disabled>✅ 确认</button>
             </div>
         </div>
     `;
-    modal.dataset.importData = JSON.stringify(importData);
     document.body.appendChild(modal);
-    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+    
+    // 初始化当前标签
+    currentImportTab = 'file';
+    
+    // 绑定事件（保存引用以便清理）
+    const dropzone = document.getElementById('importDropzone');
+    const fileInput = document.getElementById('importFileInput');
+    const manualAccessToken = document.getElementById('manualAccessToken');
+    const manualRefreshToken = document.getElementById('manualRefreshToken');
+    
+    // 创建事件处理器
+    const handlers = {
+        dropzoneClick: () => fileInput.click(),
+        fileChange: (e) => {
+            if (e.target.files[0]) {
+                handleImportFile(e.target.files[0]);
+            }
+        },
+        dragover: (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropzone.classList.add('dragover');
+        },
+        dragleave: (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropzone.classList.remove('dragover');
+        },
+        drop: (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropzone.classList.remove('dragover');
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                const file = files[0];
+                if (file.name.endsWith('.json')) {
+                    handleImportFile(file);
+                } else {
+                    showToast('请选择 JSON 文件', 'warning');
+                }
+            }
+        },
+        updateManualBtnState: () => {
+            if (currentImportTab === 'manual') {
+                const confirmBtn = document.getElementById('confirmImportBtn');
+                confirmBtn.disabled = !manualAccessToken.value.trim() || !manualRefreshToken.value.trim();
+            }
+        },
+        modalClick: (e) => { if (e.target === modal) closeImportModal(); }
+    };
+    
+    // 保存处理器引用
+    importModalHandlers = {
+        modal,
+        dropzone,
+        fileInput,
+        manualAccessToken,
+        manualRefreshToken,
+        handlers
+    };
+    
+    // 绑定事件
+    dropzone.addEventListener('click', handlers.dropzoneClick);
+    fileInput.addEventListener('change', handlers.fileChange);
+    dropzone.addEventListener('dragover', handlers.dragover);
+    dropzone.addEventListener('dragleave', handlers.dragleave);
+    dropzone.addEventListener('drop', handlers.drop);
+    manualAccessToken.addEventListener('input', handlers.updateManualBtnState);
+    manualRefreshToken.addEventListener('input', handlers.updateManualBtnState);
+    modal.addEventListener('click', handlers.modalClick);
 }
 
-// 确认导入
-async function confirmImport(btn) {
-    const modal = btn.closest('.modal');
-    const importData = JSON.parse(modal.dataset.importData);
+// 切换导入方式标签
+function switchImportTab(tab) {
+    currentImportTab = tab;
+    
+    // 更新标签状态
+    document.querySelectorAll('.import-tab').forEach(t => t.classList.remove('active'));
+    document.querySelector(`.import-tab[data-tab="${tab}"]`).classList.add('active');
+    
+    // 切换内容显示
+    document.getElementById('importTabFile').classList.toggle('hidden', tab !== 'file');
+    document.getElementById('importTabJson').classList.toggle('hidden', tab !== 'json');
+    document.getElementById('importTabManual').classList.toggle('hidden', tab !== 'manual');
+    
+    // 切换导入模式和密码输入的显示
+    const importModeGroup = document.getElementById('importModeGroup');
+    const importPasswordGroup = document.getElementById('importPasswordGroup');
+    const confirmBtn = document.getElementById('confirmImportBtn');
+    
+    if (tab === 'manual') {
+        // 手动填入模式：隐藏导入模式和密码
+        importModeGroup.classList.add('hidden');
+        importPasswordGroup.classList.add('hidden');
+        // 更新按钮状态
+        const accessToken = document.getElementById('manualAccessToken').value.trim();
+        const refreshToken = document.getElementById('manualRefreshToken').value.trim();
+        confirmBtn.disabled = !accessToken || !refreshToken;
+        confirmBtn.textContent = '✅ 添加';
+    } else {
+        // 文件上传或JSON导入模式：显示导入模式和密码
+        importModeGroup.classList.remove('hidden');
+        importPasswordGroup.classList.remove('hidden');
+        confirmBtn.textContent = '✅ 确认导入';
+        
+        // 清除之前的数据
+        if (tab === 'file') {
+            // 切换到文件上传时，清除JSON输入和手动输入
+            document.getElementById('importJsonInput').value = '';
+            document.getElementById('importJsonStatus').textContent = '';
+            document.getElementById('manualAccessToken').value = '';
+            document.getElementById('manualRefreshToken').value = '';
+            document.getElementById('manualExpiresIn').value = '3599';
+            // 按钮状态由文件选择决定
+            confirmBtn.disabled = !pendingImportData;
+        } else if (tab === 'json') {
+            // 切换到JSON输入时，清除文件选择和手动输入
+            clearImportFile();
+            document.getElementById('manualAccessToken').value = '';
+            document.getElementById('manualRefreshToken').value = '';
+            document.getElementById('manualExpiresIn').value = '3599';
+            // 按钮状态由JSON解析决定
+            confirmBtn.disabled = !pendingImportData;
+        }
+    }
+}
+
+// 智能查找字段值（不分大小写，包含匹配）
+function findFieldByKeyword(obj, keyword) {
+    if (!obj || typeof obj !== 'object') return undefined;
+    const lowerKeyword = keyword.toLowerCase();
+    for (const key of Object.keys(obj)) {
+        if (key.toLowerCase().includes(lowerKeyword)) {
+            return obj[key];
+        }
+    }
+    return undefined;
+}
+
+// 智能解析单个 Token 对象
+function smartParseToken(rawToken) {
+    if (!rawToken || typeof rawToken !== 'object') return null;
+    
+    // 必需字段：包含 refresh 的认为是 refresh_token，包含 project 的认为是 projectId
+    const refresh_token = findFieldByKeyword(rawToken, 'refresh');
+    const projectId = findFieldByKeyword(rawToken, 'project');
+    
+    // 必须同时包含这两个字段
+    if (!refresh_token || !projectId) return null;
+    
+    // 构建标准化的 token 对象
+    const token = { refresh_token, projectId };
+    
+    // 可选字段自动获取
+    const access_token = findFieldByKeyword(rawToken, 'access');
+    const email = findFieldByKeyword(rawToken, 'email') || findFieldByKeyword(rawToken, 'mail');
+    const expires_in = findFieldByKeyword(rawToken, 'expire');
+    const enable = findFieldByKeyword(rawToken, 'enable');
+    const timestamp = findFieldByKeyword(rawToken, 'time') || findFieldByKeyword(rawToken, 'stamp');
+    const hasQuota = findFieldByKeyword(rawToken, 'quota');
+    
+    if (access_token) token.access_token = access_token;
+    if (email) token.email = email;
+    if (expires_in !== undefined) token.expires_in = parseInt(expires_in) || 3599;
+    if (enable !== undefined) token.enable = enable === true || enable === 'true' || enable === 1;
+    if (timestamp) token.timestamp = typeof timestamp === 'number' ? timestamp : new Date(timestamp).getTime();
+    if (hasQuota !== undefined) token.hasQuota = hasQuota === true || hasQuota === 'true' || hasQuota === 1;
+    
+    return token;
+}
+
+// 智能解析导入数据（支持多种格式）
+function smartParseImportData(jsonText) {
+    let data;
+    let cleanText = jsonText.trim();
+    
+    // 预处理：移除尾随逗号（常见的 JSON 格式错误）
+    cleanText = cleanText.replace(/,(\s*[}\]])/g, '$1');
+    
+    try {
+        data = JSON.parse(cleanText);
+    } catch (e) {
+        // 尝试处理多个 JSON 对象（用户可能粘贴了多个对象，没有用数组包裹）
+        try {
+            // 尝试将多个对象包装成数组
+            // 匹配 }{  或 }\n{ 的情况，替换为 },{
+            const arrayText = '[' + cleanText.replace(/\}\s*\{/g, '},{') + ']';
+            data = JSON.parse(arrayText);
+        } catch (e2) {
+            return { success: false, message: `JSON 解析错误: ${e.message}` };
+        }
+    }
+    
+    // 识别数据结构：数组或对象中的数组
+    let tokensArray = [];
+    if (Array.isArray(data)) {
+        tokensArray = data;
+    } else if (typeof data === 'object' && data !== null) {
+        // 查找任何包含数组的字段
+        for (const key of Object.keys(data)) {
+            if (Array.isArray(data[key])) {
+                tokensArray = data[key];
+                break;
+            }
+        }
+        // 如果没找到数组，尝试作为单个 token 解析
+        if (tokensArray.length === 0) {
+            const single = smartParseToken(data);
+            if (single) tokensArray = [data];
+        }
+    }
+    
+    if (tokensArray.length === 0) {
+        return { success: false, message: '未找到有效数据，请确保包含 refresh_token 和 projectId' };
+    }
+    
+    // 解析每个 token
+    const validTokens = [];
+    let invalidCount = 0;
+    for (const raw of tokensArray) {
+        const parsed = smartParseToken(raw);
+        if (parsed) {
+            validTokens.push(parsed);
+        } else {
+            invalidCount++;
+        }
+    }
+    
+    if (validTokens.length === 0) {
+        return { success: false, message: `所有 ${tokensArray.length} 条数据都缺少必需字段 (refresh_token 和 projectId)` };
+    }
+    
+    const message = invalidCount > 0
+        ? `解析成功：${validTokens.length} 个有效，${invalidCount} 个无效`
+        : `解析成功：${validTokens.length} 个 Token`;
+    
+    return { success: true, tokens: validTokens, message };
+}
+
+// 解析手动输入的JSON
+function parseImportJson() {
+    const jsonInput = document.getElementById('importJsonInput');
+    const statusEl = document.getElementById('importJsonStatus');
+    const confirmBtn = document.getElementById('confirmImportBtn');
+    
+    const jsonText = jsonInput.value.trim();
+    if (!jsonText) {
+        statusEl.textContent = '❌ 请输入 JSON 内容';
+        statusEl.className = 'import-json-status error';
+        pendingImportData = null;
+        confirmBtn.disabled = true;
+        return;
+    }
+    
+    const result = smartParseImportData(jsonText);
+    
+    if (result.success) {
+        // 保存待导入数据（转换为标准格式）
+        pendingImportData = { tokens: result.tokens };
+        statusEl.textContent = `✅ ${result.message}`;
+        statusEl.className = 'import-json-status success';
+        confirmBtn.disabled = false;
+    } else {
+        statusEl.textContent = `❌ ${result.message}`;
+        statusEl.className = 'import-json-status error';
+        pendingImportData = null;
+        confirmBtn.disabled = true;
+    }
+}
+
+// 当前待导入的数据
+let pendingImportData = null;
+
+// 处理导入文件（使用智能解析）
+async function handleImportFile(file) {
+    try {
+        const text = await file.text();
+        const result = smartParseImportData(text);
+        
+        if (!result.success) {
+            showToast(result.message, 'error');
+            return;
+        }
+        
+        // 保存待导入数据（转换为标准格式）
+        pendingImportData = { tokens: result.tokens };
+        
+        // 更新UI显示文件信息
+        const dropzone = document.getElementById('importDropzone');
+        const fileInfo = document.getElementById('importFileInfo');
+        const fileName = document.getElementById('importFileName');
+        const fileMeta = document.getElementById('importFileMeta');
+        const confirmBtn = document.getElementById('confirmImportBtn');
+        
+        dropzone.classList.add('hidden');
+        fileInfo.classList.remove('hidden');
+        fileName.textContent = file.name;
+        fileMeta.textContent = result.message;
+        confirmBtn.disabled = false;
+        
+    } catch (error) {
+        showToast('读取文件失败: ' + error.message, 'error');
+    }
+}
+
+// 清除已选文件
+function clearImportFile() {
+    pendingImportData = null;
+    
+    const dropzone = document.getElementById('importDropzone');
+    const fileInfo = document.getElementById('importFileInfo');
+    const fileInput = document.getElementById('importFileInput');
+    const confirmBtn = document.getElementById('confirmImportBtn');
+    
+    dropzone.classList.remove('hidden');
+    fileInfo.classList.add('hidden');
+    fileInput.value = '';
+    confirmBtn.disabled = true;
+}
+
+// 关闭导入弹窗
+function closeImportModal() {
+    // 清理事件监听器
+    if (importModalHandlers) {
+        const { modal, dropzone, fileInput, manualAccessToken, manualRefreshToken, handlers } = importModalHandlers;
+        
+        if (dropzone) {
+            dropzone.removeEventListener('click', handlers.dropzoneClick);
+            dropzone.removeEventListener('dragover', handlers.dragover);
+            dropzone.removeEventListener('dragleave', handlers.dragleave);
+            dropzone.removeEventListener('drop', handlers.drop);
+        }
+        if (fileInput) {
+            fileInput.removeEventListener('change', handlers.fileChange);
+        }
+        if (manualAccessToken) {
+            manualAccessToken.removeEventListener('input', handlers.updateManualBtnState);
+        }
+        if (manualRefreshToken) {
+            manualRefreshToken.removeEventListener('input', handlers.updateManualBtnState);
+        }
+        if (modal) {
+            modal.removeEventListener('click', handlers.modalClick);
+        }
+        
+        importModalHandlers = null;
+    }
+    
+    const modal = document.getElementById('importUploadModal');
+    if (modal) {
+        modal.remove();
+    }
+    pendingImportData = null;
+}
+
+// 从弹窗确认导入/添加
+async function confirmImportFromModal() {
+    // 手动填入模式
+    if (currentImportTab === 'manual') {
+        const accessToken = document.getElementById('manualAccessToken').value.trim();
+        const refreshToken = document.getElementById('manualRefreshToken').value.trim();
+        const expiresIn = parseInt(document.getElementById('manualExpiresIn').value) || 3599;
+        
+        if (!accessToken || !refreshToken) {
+            showToast('请填写完整的Token信息', 'warning');
+            return;
+        }
+        
+        showLoading('正在添加Token...');
+        try {
+            const response = await authFetch('/admin/tokens', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ access_token: accessToken, refresh_token: refreshToken, expires_in: expiresIn })
+            });
+            
+            const data = await response.json();
+            hideLoading();
+            
+            if (data.success) {
+                closeImportModal();
+                showToast('Token添加成功', 'success');
+                loadTokens();
+            } else {
+                showToast(data.message || '添加失败', 'error');
+            }
+        } catch (error) {
+            hideLoading();
+            showToast('添加失败: ' + error.message, 'error');
+        }
+        return;
+    }
+    
+    // 文件上传或JSON导入模式
+    if (!pendingImportData) {
+        showToast('请先选择文件或解析JSON', 'warning');
+        return;
+    }
+    
     const mode = document.getElementById('importMode').value;
     const password = document.getElementById('importPassword').value;
     
     if (!password) {
-        showToast('请输入密码', 'warning');
+        showToast('请输入管理员密码', 'warning');
         return;
     }
     
@@ -124,18 +583,23 @@ async function confirmImport(btn) {
         const response = await authFetch('/admin/tokens/import', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ password, data: importData, mode })
+            body: JSON.stringify({ password, data: pendingImportData, mode })
         });
         
         const data = await response.json();
         hideLoading();
         
         if (data.success) {
-            modal.remove();
+            closeImportModal();
             showToast(data.message, 'success');
             loadTokens();
         } else {
-            showToast(data.message || '导入失败', 'error');
+            // 密码错误时显示具体提示
+            if (response.status === 403) {
+                showToast('密码错误，请重新输入', 'error');
+            } else {
+                showToast(data.message || '导入失败', 'error');
+            }
         }
     } catch (error) {
         hideLoading();
@@ -156,7 +620,7 @@ function showPasswordPrompt(message) {
                     <input type="password" id="promptPassword" placeholder="请输入密码">
                 </div>
                 <div class="modal-actions">
-                    <button class="btn btn-secondary" onclick="this.closest('.modal').remove()">取消</button>
+                    <button class="btn btn-secondary" id="promptCancelBtn">取消</button>
                     <button class="btn btn-success" id="promptConfirmBtn">确认</button>
                 </div>
             </div>
@@ -165,25 +629,47 @@ function showPasswordPrompt(message) {
         
         const passwordInput = document.getElementById('promptPassword');
         const confirmBtn = document.getElementById('promptConfirmBtn');
+        const cancelBtn = document.getElementById('promptCancelBtn');
         
-        confirmBtn.onclick = () => {
-            const password = passwordInput.value;
+        // 清理函数
+        const cleanup = () => {
+            confirmBtn.removeEventListener('click', handleConfirm);
+            cancelBtn.removeEventListener('click', handleCancel);
+            passwordInput.removeEventListener('keydown', handleKeydown);
+            modal.removeEventListener('click', handleModalClick);
             modal.remove();
+        };
+        
+        const handleConfirm = () => {
+            const password = passwordInput.value;
+            cleanup();
             resolve(password || null);
         };
         
-        passwordInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                confirmBtn.click();
-            }
-        });
+        const handleCancel = () => {
+            cleanup();
+            resolve(null);
+        };
         
-        modal.onclick = (e) => {
+        const handleKeydown = (e) => {
+            if (e.key === 'Enter') {
+                handleConfirm();
+            } else if (e.key === 'Escape') {
+                handleCancel();
+            }
+        };
+        
+        const handleModalClick = (e) => {
             if (e.target === modal) {
-                modal.remove();
+                cleanup();
                 resolve(null);
             }
         };
+        
+        confirmBtn.addEventListener('click', handleConfirm);
+        cancelBtn.addEventListener('click', handleCancel);
+        passwordInput.addEventListener('keydown', handleKeydown);
+        modal.addEventListener('click', handleModalClick);
         
         passwordInput.focus();
     });
@@ -280,6 +766,14 @@ async function loadTokens() {
 // 正在刷新的 Token 集合（使用 tokenId）
 const refreshingTokens = new Set();
 
+// 限制 refreshingTokens 集合大小，防止内存泄漏
+function cleanupRefreshingTokens() {
+    // 如果集合过大，清空它（正常情况下不应该有太多同时刷新的 token）
+    if (refreshingTokens.size > 100) {
+        refreshingTokens.clear();
+    }
+}
+
 function renderTokens(tokens) {
     // 只在首次加载时更新缓存
     if (tokens !== cachedTokens) {
@@ -355,6 +849,10 @@ function renderTokens(tokens) {
                     <span class="info-value sensitive-info">${safeEmail || '点击设置'}</span>
                     <span class="info-edit-icon">✏️</span>
                 </div>
+            </div>
+            <div class="token-id-row" title="Token ID: ${escapeHtml(tokenId)}">
+                <span class="token-id-label">🔑</span>
+                <span class="token-id-value">${escapeHtml(tokenId.length > 24 ? tokenId.substring(0, 12) + '...' + tokenId.substring(tokenId.length - 8) : tokenId)}</span>
             </div>
             <div class="token-quota-inline" id="quota-inline-${escapeHtml(cardId)}">
                 <div class="quota-inline-header" onclick="toggleQuotaExpand('${escapeJs(cardId)}', '${safeTokenId}')">
@@ -461,62 +959,12 @@ async function autoRefreshToken(tokenId) {
     }
 }
 
+// showManualModal 已合并到 showImportUploadModal 中
 function showManualModal() {
-    const modal = document.createElement('div');
-    modal.className = 'modal form-modal';
-    modal.innerHTML = `
-        <div class="modal-content">
-            <div class="modal-title">✏️ 手动填入Token</div>
-            <div class="form-row">
-                <input type="text" id="modalAccessToken" placeholder="Access Token (必填)">
-                <input type="text" id="modalRefreshToken" placeholder="Refresh Token (必填)">
-                <input type="number" id="modalExpiresIn" placeholder="有效期(秒)" value="3599">
-            </div>
-            <p style="font-size: 0.8rem; color: var(--text-light); margin-bottom: 12px;">💡 有效期默认3599秒(约1小时)</p>
-            <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="this.closest('.modal').remove()">取消</button>
-                <button class="btn btn-success" onclick="addTokenFromModal()">✅ 添加</button>
-            </div>
-        </div>
-    `;
-    document.body.appendChild(modal);
-    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
-}
-
-async function addTokenFromModal() {
-    const modal = document.querySelector('.form-modal');
-    const accessToken = document.getElementById('modalAccessToken').value.trim();
-    const refreshToken = document.getElementById('modalRefreshToken').value.trim();
-    const expiresIn = parseInt(document.getElementById('modalExpiresIn').value);
-    
-    if (!accessToken || !refreshToken) {
-        showToast('请填写完整的Token信息', 'warning');
-        return;
-    }
-    
-    showLoading('正在添加Token...');
-    try {
-        const response = await authFetch('/admin/tokens', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ access_token: accessToken, refresh_token: refreshToken, expires_in: expiresIn })
-        });
-        
-        const data = await response.json();
-        hideLoading();
-        if (data.success) {
-            modal.remove();
-            showToast('Token添加成功', 'success');
-            loadTokens();
-        } else {
-            showToast(data.message || '添加失败', 'error');
-        }
-    } catch (error) {
-        hideLoading();
-        showToast('添加失败: ' + error.message, 'error');
-    }
+    // 打开导入弹窗并切换到手动填入标签
+    showImportUploadModal();
+    // 延迟切换标签，确保DOM已渲染
+    setTimeout(() => switchImportTab('manual'), 0);
 }
 
 function editField(event, tokenId, field, currentValue) {
