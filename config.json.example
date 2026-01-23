@@ -46,7 +46,7 @@
     "retryTimes": 3,
     "forceIPv4": false,
     "skipProjectIdFetch": false,
-    "useNativeAxios": true,
+    "useNativeAxios": false,
     "useContextSystemPrompt": true,
     "officialPromptPosition": "before",
     "mergeSystemPrompt": false,

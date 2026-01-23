@@ -280,7 +280,7 @@ function getUpstreamResetTimestamp(error) {
  * @param {Function} options.refreshQuota - 刷新额度的回调函数（当需要获取准确恢复时间时调用）
  * @returns {Promise<any>}
  */
-export const with429Retry = async (fn, maxRetries, options = {}) => {
+export async function with429Retry(fn, maxRetries, options = {}, legacyOnAttempt = null) {
   // 兼容旧版调用方式：with429Retry(fn, maxRetries, loggerPrefix, onAttempt)
   let loggerPrefix = '';
   let onAttempt = null;
@@ -291,7 +291,7 @@ export const with429Retry = async (fn, maxRetries, options = {}) => {
   if (typeof options === 'string') {
     // 旧版调用方式
     loggerPrefix = options;
-    onAttempt = arguments[3] || null;
+    onAttempt = legacyOnAttempt;
   } else if (typeof options === 'object' && options !== null) {
     loggerPrefix = options.loggerPrefix || '';
     onAttempt = options.onAttempt || null;
