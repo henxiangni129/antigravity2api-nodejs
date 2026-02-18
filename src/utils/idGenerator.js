@@ -24,6 +24,14 @@ function generateToolCallId() {
   return `call_${randomUUID().replace(/-/g, '')}`;
 }
 
+function generateInstanceId() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const lowerChars = 'abcdefghijklmnopqrstuvwxyz';
+  const randomStr = Array.from({ length: 8 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+  const username = Array.from({ length: 4 }, () => lowerChars[Math.floor(Math.random() * lowerChars.length)]).join('');
+  return `LAPTOP-${randomStr}\\${username}-LAPTOP-${randomStr}`;
+}
+
 /**
  * 生成随机盐值
  * @returns {string} 32字节的十六进制盐值
@@ -49,6 +57,7 @@ export {
     generateSessionId,
     generateRequestId,
     generateToolCallId,
+    generateInstanceId,
     generateTokenId,
     generateSalt
 }

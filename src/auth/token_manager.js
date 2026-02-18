@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { log } from '../utils/logger.js';
-import { generateSessionId, generateProjectId, generateTokenId } from '../utils/idGenerator.js';
+import { generateSessionId, generateProjectId, generateTokenId, generateInstanceId } from '../utils/idGenerator.js';
 import config, { getConfigJson } from '../config/config.js';
 import { OAUTH_CONFIG } from '../constants/oauth.js';
 import { buildAxiosRequestConfig } from '../utils/httpClient.js';
@@ -60,7 +60,8 @@ class TokenManager {
 
       this.tokens = tokenArray.filter(token => token.enable !== false).map(token => ({
         ...token,
-        sessionId: generateSessionId()
+        sessionId: generateSessionId(),
+        instanceId: generateInstanceId()
       }));
 
       this.currentIndex = 0;

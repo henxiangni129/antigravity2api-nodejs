@@ -60,3 +60,9 @@ export const GEMINICLI_OAUTH_SCOPES = [
   'https://www.googleapis.com/auth/userinfo.email',
   'https://www.googleapis.com/auth/cloud-platform'
 ];
+
+export const FRONT_END = "production.eb07600f9680e825c582db6570e7e0adf500657b3dc4802625ba4516"
+export const CLIENT_FEATURS_REGISTER = [
+  "production.e44558998bfc35ea9584dc65858e4485fdaa5d7ef46903e0c67712d1",
+  "production.853c3f3dde009b1db67a70e1de9cfff6e3e373524f451b88b8846542"
+]
